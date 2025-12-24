@@ -965,61 +965,109 @@ async function loadUserData() {
   }
 }
 
+// ==================== УЛУЧШЕННАЯ ФУНКЦИЯ ВХОДА ====================
 async function signIn(email, password) {
   if (!supabaseClient) {
     showMessage('authError', 'База данных не настроена');
     return;
   }
   
-  const { data, error } = await supabaseClient.auth.signInWithPassword({
-    email,
-    password
-  });
-  
-  if (error) throw error;
-  
-  user = data.user;
-  await loadUserData();
-  showMainMenu();
-  showMessage('authSuccess', 'Успешный вход!');
+  try {
+    const { data, error } = await supabaseClient.auth.signInWithPassword({
+      email,
+      password
+    });
+    
+    if (error) throw error;
+    
+    user = data.user;
+    await loadUserData();
+    showMainMenu();
+    showMessage('authSuccess', 'Успешный вход!');
+  } catch (error) {
+    console.error('Ошибка входа:', error);
+    
+    // Проверяем различные типы ошибок входа
+    const errorMsg = error.message ? error.message.toLowerCase() : '';
+    if (errorMsg.includes('invalid')) {
+      showMessage('authError', 'Неверный email или пароль');
+    } else if (errorMsg.includes('email')) {
+      showMessage('authError', 'Email не подтвержден. Проверьте вашу почту');
+    } else if (errorMsg.includes('user not found')) {
+      showMessage('authError', 'Пользователь с таким email не найден');
+    } else if (errorMsg.includes('rate limit')) {
+      showMessage('authError', 'Слишком много попыток. Попробуйте позже');
+    } else {
+      // Показываем общую ошибку для других случаев
+      showMessage('authError', 'Ошибка входа: ' + error.message);
+    }
+  }
 }
 
+// ==================== УЛУЧШЕННАЯ ФУНКЦИЯ РЕГИСТРАЦИИ ====================
 async function signUp(email, password) {
   if (!supabaseClient) {
     showMessage('authError', 'База данных не настроена');
     return;
   }
   
-  const { data: signUpData, error: signUpError } = await supabaseClient.auth.signUp({
-    email,
-    password,
-    options: {
-      emailRedirectTo: window.location.origin,
-      data: { 
-        koynz: 100
-      }
-    }
-  });
-  
-  if (signUpError) {
-    throw signUpError;
+  // Проверка длины пароля
+  if (password.length < 6) {
+    showMessage('authError', 'Пароль должен содержать минимум 6 символов');
+    return;
   }
   
-  if (signUpData.user) {
-    try {
-      const { data: signInData, error: signInError } = await supabaseClient.auth.signInWithPassword({
-        email,
-        password
-      });
-      
-      if (signInError) throw signInError;
-      
-      user = signInData.user;
-      await loadUserData();
-      showMainMenu();
-      showMessage('authSuccess', 'Регистрация успешна! Вы вошли в систему.');
-    } catch (signInError) {
-      showMessage('authSuccess', 'Регистрация успешна! Теперь вы можете войти в систему.');
+  try {
+    const { data: signUpData, error: signUpError } = await supabaseClient.auth.signUp({
+      email,
+      password,
+      options: {
+        emailRedirectTo: window.location.origin,
+        data: { 
+          koynz: 100
+        }
+      }
+    });
+    
+    if (signUpError) throw signUpError;
+    
+    // Если регистрация успешна, пытаемся войти автоматически
+    if (signUpData.user) {
+      try {
+        const { data: signInData, error: signInError } = await supabaseClient.auth.signInWithPassword({
+          email,
+          password
+        });
+        
+        if (signInError) throw signInError;
+        
+        user = signInData.user;
+        await loadUserData();
+        showMainMenu();
+        showMessage('authSuccess', 'Регистрация успешна! Вы вошли в систему.');
+      } catch (signInError) {
+        // Если не удалось войти автоматически, показываем сообщение
+        showMessage('authSuccess', 'Регистрация успешна! Теперь вы можете войти в систему.');
+      }
+    }
+  } catch (error) {
+    console.error('Ошибка регистрации:', error);
+    
+    // Проверяем различные типы ошибок
+    const errorMsg = error.message ? error.message.toLowerCase() : '';
+    if (errorMsg.includes('invalid')) {
+      showMessage('authError', 'Регистрация не удалась. Этот email может быть уже использован, или пароль недопустим.');
+    } else if (errorMsg.includes('email')) {
+      showMessage('authError', 'Некорректный email адрес');
+    } else if (errorMsg.includes('password')) {
+      showMessage('authError', 'Пароль не соответствует требованиям безопасности');
+    } else if (errorMsg.includes('user') && errorMsg.includes('already')) {
+      showMessage('authError', 'Пользователь с таким email уже существует');
+    } else if (errorMsg.includes('rate limit')) {
+      showMessage('authError', 'Слишком много попыток регистрации. Попробуйте позже');
+    } else {
+      // Показываем общую ошибку для других случаев
+      showMessage('authError', 'Ошибка регистрации: ' + error.message);
     }
   }
 }
@@ -1398,7 +1446,7 @@ document.getElementById('logoutButton').addEventListener('click', signOut);
 
 // Auth panel
 document.getElementById('loginBtn').addEventListener('click', async () => {
-  const email = document.getElementById('authEmail').value;
+  const email = document.getElementById('authEmail').value.trim();
   const password = document.getElementById('authPassword').value;
   
   if (!email || !password) {
@@ -1409,12 +1457,12 @@ document.getElementById('loginBtn').addEventListener('click', async () => {
   try {
     await signIn(email, password);
   } catch (error) {
-    showMessage('authError', error.message);
+    // Ошибки уже обрабатываются внутри signIn
   }
 });
 
 document.getElementById('registerBtn').addEventListener('click', async () => {
-  const email = document.getElementById('authEmail').value;
+  const email = document.getElementById('authEmail').value.trim();
   const password = document.getElementById('authPassword').value;
   
   if (!email || !password) {
@@ -1425,7 +1473,7 @@ document.getElementById('registerBtn').addEventListener('click', async () => {
   try {
     await signUp(email, password);
   } catch (error) {
-    showMessage('authError', error.message);
+    // Ошибки уже обрабатываются внутри signUp
   }
 });
 
@@ -1727,4 +1775,4 @@ document.addEventListener('dragstart', e=>e.preventDefault());
 window.addEventListener('DOMContentLoaded', init);
 </script>
 </body>
-</html>
+  </html>
