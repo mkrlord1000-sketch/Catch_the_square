@@ -694,7 +694,7 @@
 <div id="leaderboardPanel" class="overlay">
   <div class="leaderboard-card">
     <h1>🏆 Таблица лидеров</h1>
-    <div class="desc">Топ-10 игроков за последнюю неделю</div>
+    <div class="desc">Топ-10 игроков за всё время (максимальные результаты)</div>
     
     <table class="leaderboard-table">
       <thead>
@@ -1116,22 +1116,17 @@ async function loadLeaderboard() {
   }
   
   try {
-    const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
-    
-    // ЗАГРУЖАЕМ ПОСЛЕДНИЕ 20 ИГР ЗА НЕДЕЛЮ
+    // Получаем максимальные результаты для каждого пользователя
     const { data, error } = await supabaseClient
       .from('leaderboard')
       .select(`
         user_id,
+        profiles!inner(email),
         score,
-        created_at,
-        profiles (
-          email
-        )
+        created_at
       `)
-      .gte('created_at', weekAgo)
-      .order('created_at', { ascending: false }) // Сортируем по дате (новые сверху)
-      .limit(20); // Берем больше записей для надежности
+      .order('score', { ascending: false })
+      .limit(100);
       
     if (error) {
       leaderboardBody.innerHTML = `<tr><td colspan="4">Ошибка: ${error.message}</td></tr>`;
@@ -1143,15 +1138,44 @@ async function loadLeaderboard() {
       return;
     }
     
-    // Сортируем по очкам (от большего к меньшему) для топ-10
-    const sortedByScore = [...data]
-      .sort((a, b) => b.score - a.score)
-      .slice(0, 10); // Берем топ-10 по очкам
+    // Группируем по пользователю, оставляем только максимальный результат
+    const userMaxScores = new Map();
     
+    data.forEach(item => {
+      const userId = item.user_id;
+      const currentMax = userMaxScores.get(userId);
+      
+      if (!currentMax || item.score > currentMax.score) {
+        userMaxScores.set(userId, {
+          email: item.profiles?.email || 'Аноним',
+          score: item.score,
+          created_at: item.created_at,
+          user_id: userId
+        });
+      }
+    });
+    
+    // Преобразуем в массив и сортируем по убыванию счета
+    const sortedScores = Array.from(userMaxScores.values())
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 10); // Берем топ-10
+    
+    // Находим позицию текущего пользователя, если он есть
+    let currentUserRank = -1;
+    let currentUserEntry = null;
+    
+    if (user) {
+      currentUserEntry = sortedScores.find(entry => entry.user_id === user.id);
+      if (currentUserEntry) {
+        currentUserRank = sortedScores.indexOf(currentUserEntry);
+      }
+    }
+    
+    // Отрисовываем таблицу
     leaderboardBody.innerHTML = '';
     
-    // Показываем топ-10 по очкам
-    sortedByScore.forEach((item, index) => {
+    // Топ-10
+    sortedScores.forEach((item, index) => {
       const row = document.createElement('tr');
       
       // Подсвечиваем текущего пользователя
@@ -1162,34 +1186,68 @@ async function loadLeaderboard() {
       
       row.innerHTML = `
         <td>${index + 1}</td>
-        <td>${item.profiles?.email || 'Аноним'} ${user && item.user_id === user.id ? '(Вы)' : ''}</td>
+        <td>${item.email} ${user && item.user_id === user.id ? '(Вы)' : ''}</td>
         <td>${item.score}</td>
         <td>${new Date(item.created_at).toLocaleDateString()}</td>
       `;
       leaderboardBody.appendChild(row);
     });
     
-    // Если в топ-10 нет текущего пользователя, добавляем его последний результат отдельно
-    if (user) {
-      const userInTop10 = sortedByScore.some(item => item.user_id === user.id);
-      if (!userInTop10) {
-        // Находим последний результат текущего пользователя
-        const userLastGame = data.find(item => item.user_id === user.id);
-        if (userLastGame) {
-          const separator = document.createElement('tr');
-          separator.innerHTML = '<td colspan="4" style="text-align:center; padding: 8px; color: rgba(255,255,255,0.5)">─────</td>';
-          leaderboardBody.appendChild(separator);
+    // Если текущий пользователь не в топ-10, но есть результаты, показываем его отдельно
+    if (user && currentUserRank === -1) {
+      // Ищем максимальный результат текущего пользователя
+      const { data: userData, error: userError } = await supabaseClient
+        .from('leaderboard')
+        .select('score, created_at')
+        .eq('user_id', user.id)
+        .order('score', { ascending: false })
+        .limit(1)
+        .single();
+      
+      if (userData && !userError) {
+        // Ищем общую позицию пользователя среди всех
+        const { data: allData } = await supabaseClient
+          .from('leaderboard')
+          .select('user_id, score')
+          .order('score', { ascending: false });
+        
+        if (allData) {
+          // Группируем все результаты по пользователю
+          const allUserMaxScores = new Map();
+          allData.forEach(item => {
+            const userId = item.user_id;
+            const currentMax = allUserMaxScores.get(userId);
+            if (!currentMax || item.score > currentMax.score) {
+              allUserMaxScores.set(userId, {
+                score: item.score,
+                user_id: userId
+              });
+            }
+          });
           
-          const userRow = document.createElement('tr');
-          userRow.style.backgroundColor = 'rgba(255, 77, 77, 0.15)';
-          userRow.style.borderLeft = '3px solid var(--accent)';
-          userRow.innerHTML = `
-            <td>•</td>
-            <td>${user.email} (Вы)</td>
-            <td>${userLastGame.score}</td>
-            <td>${new Date(userLastGame.created_at).toLocaleDateString()}</td>
-          `;
-          leaderboardBody.appendChild(userRow);
+          // Сортируем все результаты
+          const allSortedScores = Array.from(allUserMaxScores.values())
+            .sort((a, b) => b.score - a.score);
+          
+          // Находим позицию текущего пользователя
+          const userGlobalIndex = allSortedScores.findIndex(entry => entry.user_id === user.id);
+          
+          if (userGlobalIndex !== -1) {
+            const separator = document.createElement('tr');
+            separator.innerHTML = '<td colspan="4" style="text-align:center; padding: 8px; color: rgba(255,255,255,0.5)">─────</td>';
+            leaderboardBody.appendChild(separator);
+            
+            const userRow = document.createElement('tr');
+            userRow.style.backgroundColor = 'rgba(255, 77, 77, 0.15)';
+            userRow.style.borderLeft = '3px solid var(--accent)';
+            userRow.innerHTML = `
+              <td>${userGlobalIndex + 1}</td>
+              <td>${user.email} (Вы)</td>
+              <td>${userData.score}</td>
+              <td>${new Date(userData.created_at).toLocaleDateString()}</td>
+            `;
+            leaderboardBody.appendChild(userRow);
+          }
         }
       }
     }
