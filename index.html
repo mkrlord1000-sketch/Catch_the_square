@@ -1118,6 +1118,7 @@ async function loadLeaderboard() {
   try {
     const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
     
+    // ЗАГРУЖАЕМ ПОСЛЕДНИЕ 20 ИГР ЗА НЕДЕЛЮ
     const { data, error } = await supabaseClient
       .from('leaderboard')
       .select(`
@@ -1129,7 +1130,8 @@ async function loadLeaderboard() {
         )
       `)
       .gte('created_at', weekAgo)
-      .order('score', { ascending: false });
+      .order('created_at', { ascending: false }) // Сортируем по дате (новые сверху)
+      .limit(20); // Берем больше записей для надежности
       
     if (error) {
       leaderboardBody.innerHTML = `<tr><td colspan="4">Ошибка: ${error.message}</td></tr>`;
@@ -1141,45 +1143,56 @@ async function loadLeaderboard() {
       return;
     }
     
-    const bestResults = new Map();
-    
-    data.forEach(item => {
-      const userId = item.user_id;
-      const currentBest = bestResults.get(userId);
-      
-      if (!currentBest || item.score > currentBest.score) {
-        bestResults.set(userId, {
-          email: item.profiles?.email || 'Аноним',
-          score: item.score,
-          created_at: item.created_at
-        });
-      }
-    });
-    
-    const sortedResults = Array.from(bestResults.entries())
-      .map(([userId, data]) => ({
-        userId,
-        ...data
-      }))
+    // Сортируем по очкам (от большего к меньшему) для топ-10
+    const sortedByScore = [...data]
       .sort((a, b) => b.score - a.score)
-      .slice(0, 10);
+      .slice(0, 10); // Берем топ-10 по очкам
     
     leaderboardBody.innerHTML = '';
-    if (sortedResults.length === 0) {
-      leaderboardBody.innerHTML = '<tr><td colspan="4">Нет записей</td></tr>';
-      return;
-    }
     
-    sortedResults.forEach((item, index) => {
+    // Показываем топ-10 по очкам
+    sortedByScore.forEach((item, index) => {
       const row = document.createElement('tr');
+      
+      // Подсвечиваем текущего пользователя
+      if (user && item.user_id === user.id) {
+        row.style.backgroundColor = 'rgba(255, 77, 77, 0.1)';
+        row.style.borderLeft = '3px solid var(--accent)';
+      }
+      
       row.innerHTML = `
         <td>${index + 1}</td>
-        <td>${item.email}</td>
+        <td>${item.profiles?.email || 'Аноним'} ${user && item.user_id === user.id ? '(Вы)' : ''}</td>
         <td>${item.score}</td>
         <td>${new Date(item.created_at).toLocaleDateString()}</td>
       `;
       leaderboardBody.appendChild(row);
     });
+    
+    // Если в топ-10 нет текущего пользователя, добавляем его последний результат отдельно
+    if (user) {
+      const userInTop10 = sortedByScore.some(item => item.user_id === user.id);
+      if (!userInTop10) {
+        // Находим последний результат текущего пользователя
+        const userLastGame = data.find(item => item.user_id === user.id);
+        if (userLastGame) {
+          const separator = document.createElement('tr');
+          separator.innerHTML = '<td colspan="4" style="text-align:center; padding: 8px; color: rgba(255,255,255,0.5)">─────</td>';
+          leaderboardBody.appendChild(separator);
+          
+          const userRow = document.createElement('tr');
+          userRow.style.backgroundColor = 'rgba(255, 77, 77, 0.15)';
+          userRow.style.borderLeft = '3px solid var(--accent)';
+          userRow.innerHTML = `
+            <td>•</td>
+            <td>${user.email} (Вы)</td>
+            <td>${userLastGame.score}</td>
+            <td>${new Date(userLastGame.created_at).toLocaleDateString()}</td>
+          `;
+          leaderboardBody.appendChild(userRow);
+        }
+      }
+    }
     
   } catch (error) {
     leaderboardBody.innerHTML = `<tr><td colspan="4">Ошибка загрузки</td></tr>`;
@@ -1199,6 +1212,7 @@ async function saveScore(score) {
       
     if (error) {
       console.error('Ошибка сохранения счёта:', error);
+      return 0;
     }
     
     const earned = Math.floor(score * KOYNZ_PER_SCORE);
